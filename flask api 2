@@ -1,0 +1,123 @@
+from flask import Flask, request, jsonify
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+import random
+
+app = Flask(__name__)
+
+# Sample intents
+intents = [
+    {
+        "tag": "greeting",
+        "patterns": ["Hi", "Hello", "Hey", "How are you", "What's up"],
+        "responses": ["Hi there", "Hello", "Hey", "I'm fine, thank you", "Nothing much"]
+    },
+    {
+        "tag": "goodbye",
+        "patterns": ["Bye", "See you later", "Goodbye", "Take care"],
+        "responses": ["Goodbye", "See you later", "Take care"]
+    },
+    {
+        "tag": "thanks",
+        "patterns": ["Thank you", "Thanks", "Thanks a lot", "I appreciate it"],
+        "responses": ["You're welcome", "No problem", "Glad I could help"]
+    },
+    {
+        "tag": "about",
+        "patterns": ["What can you do", "Who are you", "What are you", "What is your purpose"],
+        "responses": ["I am a chatbot", "My purpose is to assist you", "I can answer questions and provide assistance"]
+    },
+    {
+        "tag": "help",
+        "patterns": ["Help", "I need help", "Can you help me", "What should I do"],
+        "responses": ["Sure, what do you need help with?", "I'm here to help. What's the problem?", "How can I assist you?"]
+    },
+    {
+        "tag": "leave",
+        "patterns": ["I want to apply for leave", "Can I take sick leave", "Need a vacation", "Apply for casual leave"],
+        "responses": ["Leave request noted.", "You can apply for leave using the HR portal.", "Leave applied successfully."]
+    }
+]
+
+# Train the model
+vectorizer = TfidfVectorizer()
+clf = LogisticRegression(random_state=0, max_iter=10000)
+
+tags = []
+patterns = []
+
+for intent in intents:
+    for pattern in intent['patterns']:
+        tags.append(intent['tag'])
+        patterns.append(pattern)
+
+x = vectorizer.fit_transform(patterns)
+clf.fit(x, tags)
+
+def predict_tag(text):
+    vec = vectorizer.transform([text])
+    return clf.predict(vec)[0]
+
+def get_response(tag):
+    for intent in intents:
+        if intent['tag'] == tag:
+            return random.choice(intent['responses'])
+    return "I'm not sure how to respond to that."
+
+@app.route('/')
+def index():
+    return "Chatbot API is running."
+
+@app.route('/predict-intent', methods=['POST'])
+def predict_intent():
+    data = request.json
+    text = data.get("text", "")
+    tag = predict_tag(text)
+    response = get_response(tag)
+    return jsonify({"intent": tag, "response": response})
+
+@app.route('/predict-subintent', methods=['POST'])
+def predict_subintent():
+    # Simulated subintent classification (you can replace with ML logic)
+    text = request.json.get("text", "").lower()
+    if "vacation" in text:
+        subintent = "vacation_request"
+    elif "sick" in text:
+        subintent = "sick_request"
+    else:
+        subintent = "general_request"
+    return jsonify({"subintent": subintent})
+
+@app.route('/predict-leave-type', methods=['POST'])
+def predict_leave_type():
+    text = request.json.get("text", "").lower()
+    if "sick" in text:
+        leave_type = "Sick Leave"
+    elif "casual" in text:
+        leave_type = "Casual Leave"
+    elif "vacation" in text or "holiday" in text:
+        leave_type = "Annual Leave"
+    else:
+        leave_type = "Other"
+    return jsonify({"leave_type": leave_type})
+
+@app.route('/extra-entities', methods=['POST'])
+def extra_entities():
+    # Example hardcoded entity extraction
+    text = request.json.get("text", "").lower()
+    entities = {}
+    if "tomorrow" in text:
+        entities["date"] = "tomorrow"
+    if "fever" in text:
+        entities["reason"] = "fever"
+    return jsonify({"entities": entities})
+
+@app.route('/get-faq-answer', methods=['POST'])
+def get_faq_answer():
+    question = request.json.get("question", "")
+    tag = predict_tag(question)
+    answer = get_response(tag)
+    return jsonify({"answer": answer})
+
+if __name__ == '__main__':
+    app.run(debug=True)
