@@ -1,0 +1,182 @@
+from flask import Flask, request, jsonify
+import spacy
+
+app = Flask(__name__)
+nlp = spacy.load("en_core_web_sm")
+
+# Sample leave data
+leave_data = {
+    "john.doe": {
+        "balance": {
+            "casual": 5,
+            "sick": 7,
+            "earned": 10
+        },
+        "leaves": []
+    }
+}
+
+leave_types = ["casual", "sick", "earned"]
+user_sessions = {}
+
+faq_data = {
+    "working hours": "Our standard working hours are 9 AM to 6 PM.",
+    "holiday calendar": "You can find the holiday calendar on the HR portal under 'Resources'."
+}
+
+# Greeting Intents
+greeting_intents = ["hi", "hello", "hey", "yo", "good morning", "good evening", "good afternoon", "how are you", "what's up"]
+
+# Leave Intents
+leave_intents = ["apply", "leave", "balance", "history"]
+
+# FAQ Intents
+faq_intents = ["working hours", "holiday calendar"]
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    message = request.json.get("message", "").lower()
+    user = request.json.get("user", "john.doe")
+    doc = nlp(message)
+
+    # Greet the user only once per session
+    if user not in user_sessions:
+        user_sessions[user] = True
+        return jsonify({"response": "Hi there! Welcome to the ERP Leave Assistant. How can I help you today?"})
+
+    # Check for greeting message
+    if any(phrase in message for phrase in greeting_intents):
+        return jsonify({"response": "Hello again! Let me know how I can assist you with leaves."})
+
+    # Default fallback for unknown messages
+    return jsonify({"response": "I'm not sure how to respond. You can ask for 'help' to see options."})
+
+@app.route("/predict-intent", methods=["POST"])
+def predict_intent():
+    message = request.json.get("message", "").lower()
+    
+    # Check for Greeting intents
+    if any(phrase in message for phrase in greeting_intents):
+        return jsonify({"intent": "greet"})
+    
+    # Check for Leave intents
+    elif any(phrase in message for phrase in leave_intents):
+        return jsonify({"intent": "leave_management"})
+    
+    # Check for FAQ intents
+    elif any(phrase in message for phrase in faq_intents):
+        return jsonify({"intent": "faq"})
+    
+    else:
+        return jsonify({"intent": "unknown"})
+
+@app.route("/predict-subintent", methods=["POST"])
+def predict_subintent():
+    message = request.json.get("message", "").lower()
+    
+    # Leave Sub-Intents
+    if "apply" in message:
+        if "sick" in message:
+            return jsonify({"subintent": "apply_sick_leave"})
+        elif "casual" in message:
+            return jsonify({"subintent": "apply_casual_leave"})
+        elif "earned" in message:
+            return jsonify({"subintent": "apply_earned_leave"})
+        else:
+            return jsonify({"subintent": "apply_leave"})
+
+    elif "balance" in message:
+        return jsonify({"subintent": "check_balance"})
+    
+    elif "history" in message:
+        return jsonify({"subintent": "check_history"})
+    
+    # FAQ Sub-Intents
+    elif "working hours" in message:
+        return jsonify({"subintent": "ask_working_hours"})
+    
+    elif "holiday calendar" in message:
+        return jsonify({"subintent": "ask_holiday_calendar"})
+    
+    else:
+        return jsonify({"subintent": "unknown"})
+
+@app.route("/predict-leave-type", methods=["POST"])
+def predict_leave_type():
+    message = request.json.get("message", "").lower()
+    doc = nlp(message)
+
+    for token in doc:
+        if token.text.lower() in leave_types:
+            return jsonify({"leave_type": token.text.lower()})
+    return jsonify({"leave_type": "unknown"})
+
+@app.route("/extract-entities", methods=["POST"])
+def extract_entities():
+    message = request.json.get("message", "").lower()
+    doc = nlp(message)
+
+    # Extract leave type
+    leave_type = None
+    for token in doc:
+        if token.text.lower() in leave_types:
+            leave_type = token.text.lower()
+
+    # Extract date (simple example: extract any date-like entities)
+    date_entities = [ent.text for ent in doc.ents if ent.label_ == "DATE"]
+
+    return jsonify({
+        "leave_type": leave_type if leave_type else "unknown",
+        "dates": date_entities
+    })
+
+@app.route("/get-faq-answer", methods=["POST"])
+def get_faq_answer():
+    question = request.json.get("message", "").lower()
+    for keyword, answer in faq_data.items():
+        if keyword in question:
+            return jsonify({"answer": answer})
+    return jsonify({"answer": "I'm sorry, I don't have an answer for that. You can ask about leave policies."})
+
+# Leave management logic
+def check_balance(user, leave_type=None):
+    balance = leave_data[user]["balance"]
+    if leave_type:
+        days = balance.get(leave_type, 0)
+        return jsonify({"response": f"You have {days} {leave_type} leave days left."})
+    all_bal = "\n".join([f"{k.title()}: {v}" for k, v in balance.items()])
+    return jsonify({"response": f"Your leave balances:\n{all_bal}"})
+
+def handle_apply_leave(user, doc):
+    leave_type = None
+    days = None
+    for token in doc:
+        if token.text.lower() in leave_types:
+            leave_type = token.text.lower()
+        if token.like_num:
+            days = int(token.text)
+
+    if not leave_type:
+        return jsonify({"response": "Please specify the leave type (casual, sick, earned)."})
+    if not days:
+        return jsonify({"response": "Please specify how many days of leave you want to apply for."})
+
+    return apply_leave(user, leave_type, days)
+
+def apply_leave(user, leave_type, days):
+    if leave_data[user]["balance"].get(leave_type, 0) >= days:
+        leave_data[user]["balance"][leave_type] -= days
+        leave_data[user]["leaves"].append({"type": leave_type, "days": days})
+        return jsonify({"response": f"{leave_type.title()} leave for {days} days applied successfully."})
+    else:
+        return jsonify({"response": f"You don't have enough {leave_type} leave."})
+
+def get_history(user):
+    history = leave_data[user]["leaves"]
+    if not history:
+        return jsonify({"response": "No leave history found."})
+    formatted = "\n".join([f"{l['type'].title()} Leave - {l['days']} days" for l in history])
+    return jsonify({"response": f"Your leave history:\n{formatted}"})
+
+if __name__ == "__main__":
+    app.run(debug=True)
